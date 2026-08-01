@@ -5,14 +5,38 @@ Loads the saved *_<run_tag>.pt weights from CKPT_DIR, exports each to ONNX (on C
 which is what the notebook run got wrong), then converts to TFLite via onnx2tf.
 Writes fp16/fp32 sizes into results_<run_tag>.json (merged, not overwritten).
 
+Offline note (Carmack): onnx2tf unconditionally calls download_test_image_data(),
+which fetches a calibration .npy from GitHub and dies on a firewalled host
+(ConnectionResetError 104). That data is only used for INT8 quantisation, which we
+do not do, so we pre-create a dummy file of the right shape in the onnx2tf working
+directory. If the file already exists, onnx2tf skips the download entirely.
+See https://github.com/PINTO0309/onnx2tf/issues/545
+
 Usage:
     python export_tflite.py                 # defaults below
     python export_tflite.py --run-tag baseline --input-size 224
 """
 import os, sys, json, glob, argparse, subprocess
 
+import numpy as np
 import torch
 import timm
+
+CALIB_NAME = 'calibration_image_sample_data_20x128x128x3_float32.npy'
+
+
+def ensure_calibration_file(work_dir):
+    """Create a dummy onnx2tf calibration file so it never hits the network.
+
+    Contents are irrelevant for fp16/fp32 export; onnx2tf only needs the file to
+    exist. Shape (20, 128, 128, 3) float32 is fixed by the filename onnx2tf expects.
+    """
+    path = os.path.join(work_dir, CALIB_NAME)
+    if not os.path.exists(path):
+        np.save(path, np.zeros((20, 128, 128, 3), dtype=np.float32))
+        print(f'  wrote dummy calibration file -> {path}')
+    return path
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -31,6 +55,10 @@ def main():
     subprocess.run([sys.executable, '-m', 'pip', 'install', '-q',
                     'onnxscript', 'onnx2tf', 'onnx', 'onnxruntime',
                     'onnx-graphsurgeon', 'sng4onnx', 'onnxslim', 'ai-edge-litert'])
+
+    # onnx2tf looks for the calibration file relative to its own CWD. We run onnx2tf
+    # with cwd=CKPT below, so drop the dummy file there.
+    ensure_calibration_file(CKPT)
 
     results_path = os.path.join(CKPT, f'results_{TAG}.json')
     results = json.load(open(results_path)) if os.path.exists(results_path) else {}
@@ -58,7 +86,9 @@ def main():
 
         tf_dir = os.path.join(CKPT, f'{name}_{TAG}_tf')
         try:
-            subprocess.run(['onnx2tf', '-i', onnx_path, '-o', tf_dir, '-n'], check=True)
+            # run onnx2tf with cwd=CKPT so it finds the dummy calibration file there
+            subprocess.run(['onnx2tf', '-i', onnx_path, '-o', tf_dir, '-n'],
+                           check=True, cwd=CKPT)
         except Exception as e:
             print(f'  onnx2tf failed: {repr(e)[:200]}'); continue
 
