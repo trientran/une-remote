@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Send a run-status email with metrics + error tail inline, and files attached.
-Usage: python notify.py <STATUS> <LOG_PATH>
-Credentials come from environment (see run.sh / carmack_notify.env):
-  CARMACK_EMAIL_FROM, CARMACK_EMAIL_APP_PASSWORD, CARMACK_EMAIL_TO (optional)
+
+Usage:
+    python notify.py <STATUS> <LOG_PATH> [RESULTS_JSON_PATH]
+
+If RESULTS_JSON_PATH is omitted it falls back to $CARMACK_RESULTS or
+results_baseline.json. Credentials come from the environment (never hardcode
+them in a repo file):
+    CARMACK_EMAIL_FROM, CARMACK_EMAIL_APP_PASSWORD, CARMACK_EMAIL_TO (optional)
 """
 import os, sys, json, socket, smtplib, mimetypes
 from datetime import datetime
@@ -10,44 +15,50 @@ from email.message import EmailMessage
 
 STATUS   = sys.argv[1] if len(sys.argv) > 1 else "UNKNOWN"
 LOG_PATH = sys.argv[2] if len(sys.argv) > 2 else ""
-RESULTS  = "/scratch/ttran72/checkpoints/results_baseline.json"
+RESULTS  = (sys.argv[3] if len(sys.argv) > 3 else
+            os.environ.get("CARMACK_RESULTS",
+                           "/scratch/ttran72/checkpoints/results_baseline.json"))
 
-FROM = "aunhi55@gmail.com"
-PW   = "ybzb qhug rpsg mvik"
-TO   = "ttran72@myune.edu.au"
+FROM = os.environ.get("CARMACK_EMAIL_FROM")
+PW   = os.environ.get("CARMACK_EMAIL_APP_PASSWORD")
+TO   = os.environ.get("CARMACK_EMAIL_TO", FROM)
+if not (FROM and PW):
+    sys.exit("notify.py: set CARMACK_EMAIL_FROM and CARMACK_EMAIL_APP_PASSWORD "
+             "in the environment (e.g. source ~/.config/carmack_notify.env)")
 
 host = socket.gethostname()
 now  = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-# ---- build a concise, mobile-friendly body ----
-lines = [f"Status : {STATUS}", f"Host   : {host}", f"Time   : {now}", ""]
+lines = [f"Status : {STATUS}", f"Host   : {host}", f"Time   : {now}",
+         f"Results: {os.path.basename(RESULTS)}", ""]
 
-# Inline the key metrics if results.json parsed cleanly
 if os.path.isfile(RESULTS):
     try:
         data = json.load(open(RESULTS))
         lines.append("=== results (summary) ===")
-        # try a tidy per-model view; fall back to pretty dump
         if isinstance(data, dict) and all(isinstance(v, dict) for v in data.values()):
             for name, r in data.items():
                 t = r.get("test", {}) if isinstance(r.get("test"), dict) else {}
-                accs = t.get("accs", {}) if isinstance(t, dict) else {}
-                acc_str = "  ".join(f"top{k}={accs[k]:.4f}" for k in sorted(accs, key=lambda x: int(x))) if accs else ""
+                # notebook 01/02 store test accs either as {"accs":{k:..}} or flat "topK"
+                accs = t.get("accs", {}) if isinstance(t.get("accs"), dict) else \
+                       {k.replace("top", ""): v for k, v in t.items() if k.startswith("top")}
+                acc_str = "  ".join(f"top{k}={float(accs[k]):.4f}"
+                                    for k in sorted(accs, key=lambda x: int(x))) if accs else ""
                 extra = []
-                if "best_acc" in r:   extra.append(f"val_top1={r['best_acc']:.4f}")
-                if t.get("macro_f1") is not None:    extra.append(f"macroF1={t['macro_f1']:.4f}")
-                if t.get("weighted_f1") is not None: extra.append(f"wF1={t['weighted_f1']:.4f}")
-                if "params" in r:     extra.append(f"params={r['params']:,}")
+                if r.get("val_top1_best") is not None: extra.append(f"val_top1={r['val_top1_best']:.4f}")
+                elif r.get("best_acc") is not None:    extra.append(f"val_top1={r['best_acc']:.4f}")
+                if t.get("macro_f1") is not None:      extra.append(f"macroF1={t['macro_f1']:.4f}")
+                if t.get("weighted_f1") is not None:   extra.append(f"wF1={t['weighted_f1']:.4f}")
+                if r.get("params") is not None:        extra.append(f"params={r['params']:,}")
                 lines.append(f"- {name}: {acc_str}  {'  '.join(extra)}".rstrip())
         else:
             dump = json.dumps(data, indent=2)
             lines.append(dump[:6000] + ("\n...(truncated; see attachment)" if len(dump) > 6000 else ""))
     except Exception as e:
-        lines.append(f"(could not parse results.json: {e})")
+        lines.append(f"(could not parse results json: {e})")
 else:
     lines.append("results file: NOT FOUND (run did not reach the final write)")
 
-# On failure, inline the tail of the log so you can read the error on your phone
 if STATUS.startswith("FAIL") and LOG_PATH and os.path.isfile(LOG_PATH):
     try:
         tail = open(LOG_PATH, errors="replace").read().splitlines()[-80:]
@@ -61,7 +72,6 @@ msg["From"] = FROM
 msg["To"]   = TO
 msg.set_content("\n".join(lines))
 
-# ---- attach full files for completeness ----
 for path in (RESULTS, LOG_PATH):
     if path and os.path.isfile(path):
         ctype, _ = mimetypes.guess_type(path)
