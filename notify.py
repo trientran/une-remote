@@ -19,12 +19,9 @@ RESULTS  = (sys.argv[3] if len(sys.argv) > 3 else
             os.environ.get("CARMACK_RESULTS",
                            "/scratch/ttran72/checkpoints/results_baseline.json"))
 
-FROM = os.environ.get("CARMACK_EMAIL_FROM")
-PW   = os.environ.get("CARMACK_EMAIL_APP_PASSWORD")
-TO   = os.environ.get("CARMACK_EMAIL_TO", FROM)
-if not (FROM and PW):
-    sys.exit("notify.py: set CARMACK_EMAIL_FROM and CARMACK_EMAIL_APP_PASSWORD "
-             "in the environment (e.g. source ~/.config/carmack_notify.env)")
+FROM = "aunhi55@gmail.com"
+PW   = "ybzb qhug rpsg mvik"
+TO   = "ttran72@myune.edu.au"
 
 host = socket.gethostname()
 now  = datetime.now().strftime("%Y-%m-%d %H:%M")
