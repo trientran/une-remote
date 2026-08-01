@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""MobileViT -> TFLite via ai-edge-torch (direct PyTorch path, no ONNX detour).
+"""MobileViT -> TFLite via LiteRT Torch (direct PyTorch path, no ONNX detour).
 
 onnx2tf mangles MobileViT's attention block: its NCHW->NHWC pass transposes one
 operand of an attention-score Mul but not the other, giving
-"Dimensions must be equal, but are 16 and 4". ai-edge-torch converts straight
-from torch.export and never inserts those transposes, so the attention survives.
+"Dimensions must be equal, but are 16 and 4". The LiteRT Torch converter goes
+straight from torch.export and never inserts those transposes.
 
-Run in a SEPARATE venv from the training/onnx2tf one. Use Python 3.11 so pip gets
-the modern ai-edge-torch (no torch_xla). CPU torch is fine; the export runs on CPU:
+Run in a SEPARATE venv from the training/onnx2tf one, on Python 3.11:
     python3.11 -m venv /scratch/ttran72/venvs/aiedge
     source /scratch/ttran72/venvs/aiedge/bin/activate
-    pip install torch==2.4.1 timm ai-edge-torch
+    pip install torch==2.4.1 timm litert-torch
+
+(The package formerly called ai-edge-torch was renamed to litert-torch; the old
+ import name no longer exposes .convert, so we use litert_torch here.)
 
 Usage:
     python export_mobilevit_aiedge.py
@@ -20,16 +22,21 @@ import os, json, argparse
 
 import torch
 import timm
-import ai_edge_torch
 
-# fp16 is requested via the LiteRT converter flags. Modern ai-edge-torch ships
-# ai-edge-litert rather than full tensorflow, so pull the float16 dtype from
-# numpy instead of `import tensorflow as tf`. The converter accepts np.float16.
+# Prefer the new module name; fall back to the old alias only if it still has convert.
 try:
-    import tensorflow as _tf          # if a full TF happens to be installed
+    import litert_torch as lrt
+except ImportError:
+    import ai_edge_torch as lrt
+if not hasattr(lrt, 'convert'):
+    import ai_edge_torch as lrt  # last resort; will raise clearly below if also empty
+
+# fp16 dtype for the converter flag. numpy.float16 is accepted and avoids needing TF.
+try:
+    import tensorflow as _tf
     FLOAT16 = _tf.float16
 except Exception:
-    import numpy as _np               # normal case: no tensorflow in this venv
+    import numpy as _np
     FLOAT16 = _np.float16
 
 
@@ -43,6 +50,7 @@ def main():
     args = ap.parse_args()
 
     CKPT, TAG, SZ = args.ckpt_dir, args.run_tag, args.input_size
+    print(f'using converter module: {lrt.__name__}')
 
     results_path = os.path.join(CKPT, f'results_{TAG}.json')
     results = json.load(open(results_path)) if os.path.exists(results_path) else {}
@@ -54,15 +62,16 @@ def main():
             print(f'  SKIP: weights not found: {weights}'); continue
 
         model = timm.create_model(name, pretrained=False, num_classes=args.num_classes)
-        model.load_state_dict(torch.load(weights, map_location='cpu'))
+        model.load_state_dict(torch.load(weights, map_location='cpu', weights_only=True))
         model.eval().cpu()
 
-        sample = (torch.randn(1, 3, SZ, SZ),)   # NCHW, native PyTorch layout
+        with torch.no_grad():
+            sample = (torch.randn(1, 3, SZ, SZ),)   # NCHW, native PyTorch layout
         rec = results.get(name, {})
 
         # fp32
         try:
-            edge = ai_edge_torch.convert(model, sample)
+            edge = lrt.convert(model, sample)
             p32 = os.path.join(CKPT, f'{name}_{TAG}_float32.tflite')
             edge.export(p32)
             rec['tflite_fp32_mb'] = round(os.path.getsize(p32) / 1e6, 2)
@@ -72,7 +81,7 @@ def main():
 
         # fp16
         try:
-            edge16 = ai_edge_torch.convert(
+            edge16 = lrt.convert(
                 model, sample,
                 _ai_edge_converter_flags={'target_spec.supported_types': [FLOAT16]},
             )
