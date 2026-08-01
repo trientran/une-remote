@@ -6,9 +6,10 @@ operand of an attention-score Mul but not the other, giving
 "Dimensions must be equal, but are 16 and 4". ai-edge-torch converts straight
 from torch.export and never inserts those transposes, so the attention survives.
 
-Run in a SEPARATE venv from the training/onnx2tf one (ai-edge-torch pins torch==2.4.*):
-    python3.9 -m venv ~/venvs/aiedge
-    source ~/venvs/aiedge/bin/activate
+Run in a SEPARATE venv from the training/onnx2tf one. Use Python 3.11 so pip gets
+the modern ai-edge-torch (no torch_xla). CPU torch is fine; the export runs on CPU:
+    python3.11 -m venv /scratch/ttran72/venvs/aiedge
+    source /scratch/ttran72/venvs/aiedge/bin/activate
     pip install torch==2.4.1 timm ai-edge-torch
 
 Usage:
@@ -19,8 +20,17 @@ import os, json, argparse
 
 import torch
 import timm
-import tensorflow as tf
 import ai_edge_torch
+
+# fp16 is requested via the LiteRT converter flags. Modern ai-edge-torch ships
+# ai-edge-litert rather than full tensorflow, so pull the float16 dtype from
+# numpy instead of `import tensorflow as tf`. The converter accepts np.float16.
+try:
+    import tensorflow as _tf          # if a full TF happens to be installed
+    FLOAT16 = _tf.float16
+except Exception:
+    import numpy as _np               # normal case: no tensorflow in this venv
+    FLOAT16 = _np.float16
 
 
 def main():
@@ -64,7 +74,7 @@ def main():
         try:
             edge16 = ai_edge_torch.convert(
                 model, sample,
-                _ai_edge_converter_flags={'target_spec.supported_types': [tf.float16]},
+                _ai_edge_converter_flags={'target_spec.supported_types': [FLOAT16]},
             )
             p16 = os.path.join(CKPT, f'{name}_{TAG}_float16.tflite')
             edge16.export(p16)
