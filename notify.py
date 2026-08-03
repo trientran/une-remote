@@ -5,9 +5,16 @@ Usage:
     python notify.py <STATUS> <LOG_PATH> [RESULTS_JSON_PATH]
 
 If RESULTS_JSON_PATH is omitted it falls back to $CARMACK_RESULTS or
-results_baseline.json. Credentials come from the environment (never hardcode
-them in a repo file):
-    CARMACK_EMAIL_FROM, CARMACK_EMAIL_APP_PASSWORD, CARMACK_EMAIL_TO (optional)
+results_baseline.json.
+
+Credentials come from the environment (never hardcode secrets in a repo file):
+    CARMACK_EMAIL_FROM           gmail address to send from       (required)
+    CARMACK_EMAIL_APP_PASSWORD   gmail app password               (required)
+    CARMACK_EMAIL_TO             recipient (default: same as FROM)
+Set them once, e.g. in ~/.bashrc:
+    export CARMACK_EMAIL_FROM='you@gmail.com'
+    export CARMACK_EMAIL_APP_PASSWORD='xxxx xxxx xxxx xxxx'
+    export CARMACK_EMAIL_TO='ttran72@myune.edu.au'
 """
 import os, sys, json, socket, smtplib, mimetypes
 from datetime import datetime
@@ -19,9 +26,13 @@ RESULTS  = (sys.argv[3] if len(sys.argv) > 3 else
             os.environ.get("CARMACK_RESULTS",
                            "/scratch/ttran72/checkpoints/results_baseline.json"))
 
-FROM = "aunhi55@gmail.com"
-PW   = "ybzb qhug rpsg mvik"
-TO   = "ttran72@myune.edu.au"
+FROM = os.environ.get("CARMACK_EMAIL_FROM")
+PW   = os.environ.get("CARMACK_EMAIL_APP_PASSWORD")
+TO   = os.environ.get("CARMACK_EMAIL_TO", FROM)
+
+if not FROM or not PW:
+    sys.exit("notify.py: set CARMACK_EMAIL_FROM and CARMACK_EMAIL_APP_PASSWORD "
+             "in the environment (see the module docstring). Not sending.")
 
 host = socket.gethostname()
 now  = datetime.now().strftime("%Y-%m-%d %H:%M")
