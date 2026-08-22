@@ -44,7 +44,7 @@ class NHWCWrapper(torch.nn.Module):
         self.model = model
 
     def forward(self, x):                      # x: [B,H,W,C]
-        return self.model(x.permute(0, 3, 1, 2).contiguous())
+        return torch.softmax(self.model(x.permute(0, 3, 1, 2).contiguous()), dim=1)
 
 
 def main():
