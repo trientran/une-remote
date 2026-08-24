@@ -94,8 +94,8 @@ def main():
 
         tf_dir = os.path.join(CKPT, f'{name}_{TAG}_sm_tf')
         try:
-            subprocess.run(['onnx2tf', '-i', onnx_path, '-o', tf_dir, '-n'],
-                           check=True, cwd=CKPT)
+            subprocess.run(['onnx2tf', '-i', onnx_path, '-o', tf_dir, '-n', '-rtpo', 'Erf', 'GeLU'],
+               check=True, cwd=CKPT)
         except Exception as e:
             print(f'  onnx2tf failed: {repr(e)[:200]}'); continue
 
